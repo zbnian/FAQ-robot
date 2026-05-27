@@ -1,0 +1,293 @@
+{
+  "version": 2,
+  "created": "2026-05-27T00:00:00Z",
+  "session_config": {
+    "concurrency_mode": "exclusive",
+    "max_tasks_per_session": 5,
+    "max_sessions": 50
+  },
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "项目初始化（目录、依赖）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": [],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -c \"import faiss, sentence_transformers, ollama, lark\"\n",
+        "timeout_seconds": 60
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-002",
+      "title": "实现 indexer.py（FAISS索引构建，按##二级标题分块）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-001"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -m pytest tests/test_indexer.py -v",
+        "timeout_seconds": 120
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-003",
+      "title": "实现 retriever.py（向量检索，Top-K=3，阈值0.5）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-002"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -m pytest tests/test_retriever.py -v",
+        "timeout_seconds": 120
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-004",
+      "title": "实现 generator.py（Ollama生成，使用Prompt模板）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-003"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -m pytest tests/test_generator.py -v",
+        "timeout_seconds": 180
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-005",
+      "title": "实现 main.py（命令行Demo）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-004"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py main.py \"耶加雪菲是什么\"",
+        "timeout_seconds": 60
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-006",
+      "title": "实现 feishu_client.py（lark-oapi客户端）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-005"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -m pytest tests/test_feishu_client.py -v",
+        "timeout_seconds": 60
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-007",
+      "title": "实现 handler.py（消息处理）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-006"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -m pytest tests/test_handler.py -v",
+        "timeout_seconds": 60
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-008",
+      "title": "配置 .env（飞书机器人凭证）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-007"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "test -f .env && echo \"ENV_EXISTS\" || echo \"ENV_MISSING\"",
+        "timeout_seconds": 10
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-009",
+      "title": "实现 feedback.py（反馈收集）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-008"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -m pytest tests/test_feedback.py -v",
+        "timeout_seconds": 60
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-010",
+      "title": "实现 notifier.py（飞书通知发给你）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-009"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -m pytest tests/test_notifier.py -v",
+        "timeout_seconds": 60
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-011",
+      "title": "实现 scheduler.py（APScheduler每天重建）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-010"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -m pytest tests/test_scheduler.py -v",
+        "timeout_seconds": 60
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-012",
+      "title": "indexer.py 增加触发更新检测",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-011"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -m pytest tests/test_index_update.py -v",
+        "timeout_seconds": 60
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-013",
+      "title": "实现 logger.py（时间轮转日志，保留7天）",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-012"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "py -m pytest tests/test_logger.py -v",
+        "timeout_seconds": 60
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    },
+    {
+      "id": "task-014",
+      "title": "实现 Dockerfile + docker-compose.yml",
+      "status": "pending",
+      "priority": "P0",
+      "depends_on": ["task-013"],
+      "attempts": 0,
+      "max_attempts": 3,
+      "started_at_commit": null,
+      "validation": {
+        "command": "docker compose build faq-bot",
+        "timeout_seconds": 300
+      },
+      "on_failure": {
+        "cleanup": null
+      },
+      "error_log": [],
+      "checkpoints": [],
+      "completed_at": null
+    }
+  ],
+  "session_count": 0,
+  "last_session": null
+}
