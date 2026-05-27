@@ -17,7 +17,7 @@
       "max_attempts": 3,
       "started_at_commit": null,
       "validation": {
-        "command": "py -c \"import faiss, sentence_transformers, ollama, lark\"\n",
+        "command": "py -c \"import faiss, sentence_transformers, ollama, lark\"",
         "timeout_seconds": 60
       },
       "on_failure": {

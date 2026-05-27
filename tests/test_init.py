@@ -1,0 +1,1 @@
+# Test file placeholder for task-001 validation
