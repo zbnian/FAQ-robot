@@ -86,6 +86,7 @@ class FeishuWebSocket:
 
             text = content.get("text", "").strip()
             message_id = getattr(message, 'message_id', None)
+            chat_type = getattr(message, 'chat_type', 'p2p')
             sender = event.sender if hasattr(event, 'sender') else None
             user_id = None
             if sender:
@@ -93,11 +94,23 @@ class FeishuWebSocket:
                 if sender_id:
                     user_id = getattr(sender_id, 'open_id', None)
 
-            # 处理@小光咖啡百科
-            if text.startswith("@小光咖啡百科"):
-                text = text.replace("@小光咖啡百科", "").strip()
-            elif text.startswith("@机器人"):
-                text = text.replace("@机器人", "").strip()
+            # 检查mentions字段
+            mentions = getattr(message, 'mentions', None)
+            mention_names = []
+            if mentions:
+                for m in mentions:
+                    name = getattr(m, 'name', None)
+                    if name:
+                        mention_names.append(name)
+
+            print(f"[原始消息] user={user_id}, message_id={message_id}, chat_type={chat_type}, text={text}, mentions={mention_names}")
+
+            # 私信(p2p)不需要@mention，群聊(group)需要@小光咖啡百科才响应
+            if chat_type == 'group':
+                if "小光咖啡百科" not in mention_names:
+                    return
+                # 群聊时移除@占位符
+                text = text.replace("@_user_1", "").strip()
 
             if not text:
                 return
