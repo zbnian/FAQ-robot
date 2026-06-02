@@ -2,10 +2,31 @@
 自动优化模块 - 阈值调整 + 查询扩展学习
 """
 import json
+import re
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 from config.settings import settings
+
+
+# 种子扩展词典（咖啡领域同义词/近义词）
+SEED_EXPANSIONS: Dict[str, List[str]] = {
+    "特色": ["特点", "特征", "风味", "口感", "特性"],
+    "产地": ["产区", "种植区", "出产"],
+    "区别": ["差异", "不同", "对比"],
+    "品种": ["品类", "种类"],
+    "豆": ["咖啡豆", "豆种"],
+    "冲泡": ["冲煮", "萃取", "冲", "泡"],
+    "参数": ["比例", "水温", "研磨度", "粉水比"],
+    "处理法": ["处理", "加工方法", "加工方式"],
+    "做法": ["步骤", "方法", "教程", "如何做"],
+    "贵": ["价格", "昂贵", "价值"],
+    "等级": ["分级", "标准"],
+    "分级": ["等级", "标准"],
+    "瑰夏": ["Geisha", "艺伎"],
+    "阿拉比卡": ["Arabica", "小粒种"],
+    "罗布斯塔": ["Robusta", "中粒种"],
+}
 
 
 class ThresholdOptimizer:
@@ -73,12 +94,35 @@ class ThresholdOptimizer:
         return action
 
 
+def _call_ollama(prompt: str, timeout: int = 30) -> str:
+    """调用 Ollama 生成文本（用于 LLM 改写/学习）"""
+    import requests
+    try:
+        response = requests.post(
+            f"{settings.ollama_base_url}/api/generate",
+            json={
+                "model": settings.ollama_model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.3, "top_p": 0.9}
+            },
+            timeout=timeout
+        )
+        response.raise_for_status()
+        return response.json().get("response", "").strip()
+    except Exception as e:
+        return ""
+
+
 class QueryExpansionLearner:
-    """查询扩展学习器"""
+    """查询扩展学习器 - 词典级扩展 + LLM 改写"""
 
     def __init__(self):
         self.expansions_file = settings.feedback_dir / "query_expansions.json"
-        self.expansions = self._load_expansions()
+        # 合并种子词典和学到的扩展（种子优先级低）
+        learned = self._load_expansions()
+        self.expansions = {**learned, **SEED_EXPANSIONS}
+        self._seed_loaded = True
 
     def _load_expansions(self) -> Dict[str, List[str]]:
         """加载用户学到的扩展"""
@@ -90,63 +134,151 @@ class QueryExpansionLearner:
             pass
         return {}
 
-    def _save_expansions(self):
-        """保存扩展词库"""
+    def _save_learned_expansions(self):
+        """只保存学到的扩展（不含种子）"""
         self.expansions_file.parent.mkdir(parents=True, exist_ok=True)
+        learned = {k: v for k, v in self.expansions.items() if k not in SEED_EXPANSIONS}
         with open(self.expansions_file, "w", encoding="utf-8") as f:
-            json.dump(self.expansions, f, ensure_ascii=False, indent=2)
+            json.dump(learned, f, ensure_ascii=False, indent=2)
 
     def add_expansion(self, from_term: str, to_terms: List[str]):
         """添加扩展词对"""
         if from_term not in self.expansions:
             self.expansions[from_term] = []
         for term in to_terms:
-            if term not in self.expansions[from_term]:
+            if term and term not in self.expansions[from_term]:
                 self.expansions[from_term].append(term)
-        self._save_expansions()
+        self._save_learned_expansions()
 
     def get_expansions(self) -> Dict[str, List[str]]:
         """获取所有扩展"""
         return self.expansions
 
-    def learn_from_no_context(self, question: str, retrieved_chunks: List[any],
-                                all_chunks: List[any]) -> Optional[str]:
+    def expand_with_dict(self, query: str) -> List[str]:
         """
-        从no_context反馈中学习
+        基于词典扩展 query 为多个变体
 
-        分析用户问题为什么没有召回相关chunk，尝试找出扩展词
+        对每个命中的 from_term，把 query 中的 from_term 替换为每个 to_term，
+        生成一组变体（不含原 query）。
+
+        Args:
+            query: 原始查询
+
+        Returns:
+            变体列表（不含原 query，可能为空）
+        """
+        variants = []
+        for from_term, to_terms in self.expansions.items():
+            if from_term in query:
+                for to_term in to_terms:
+                    variant = query.replace(from_term, to_term)
+                    if variant != query and variant not in variants:
+                        variants.append(variant)
+        return variants
+
+    def expand_with_llm(self, query: str, n: int = 2) -> List[str]:
+        """
+        用 LLM 把 query 改写为 N 个语义等价的变体
+
+        Args:
+            query: 原始查询
+            n: 变体数量
+
+        Returns:
+            变体列表
+        """
+        prompt = f"""你是咖啡知识问答的查询改写助手。请把用户的查询改写为 {n} 个语义等价的变体（用于扩大检索召回）。
+要求：
+1. 同义改写、口语化改写、专业术语化改写均可
+2. 保留核心实体词（如国家名、品种名、产区名不要改）
+3. 每行一个变体，不要编号、不要其他解释
+
+用户查询：{query}
+
+变体："""
+
+        result = _call_ollama(prompt, timeout=20)
+        if not result:
+            return []
+
+        # 解析：每行一个变体
+        variants = []
+        for line in result.split("\n"):
+            line = line.strip()
+            # 跳过空行、编号、解释
+            if not line:
+                continue
+            # 去掉行首编号 "1. " "1、" 等
+            line = re.sub(r"^[\d]+[\.\、\)]\s*", "", line)
+            if line and line != query and line not in variants:
+                variants.append(line)
+        return variants[:n]
+
+    def expand(self, query: str, use_llm: bool = True, llm_variants: int = 2) -> List[str]:
+        """
+        综合扩展：词典 + LLM
+
+        Args:
+            query: 原始查询
+            use_llm: 是否使用 LLM 改写
+            llm_variants: LLM 改写数量
+
+        Returns:
+            所有变体列表（不含原 query）
+        """
+        variants = self.expand_with_dict(query)
+        if use_llm:
+            llm_vars = self.expand_with_llm(query, n=llm_variants)
+            for v in llm_vars:
+                if v not in variants and v != query:
+                    variants.append(v)
+        return variants
+
+    def learn_from_no_context(self, question: str, expected_keywords: List[str]) -> Optional[str]:
+        """
+        从 no_context 反馈中学习扩展词
 
         Args:
             question: 用户问题
-            retrieved_chunks: 检索到的chunk（应该为空或低分）
-            all_chunks: 所有chunk列表
+            expected_keywords: 期望命中的关键词（人工标注或从知识库推断）
 
         Returns:
-            学到的扩展描述，如果没有学到则返回None
+            学到的扩展描述
         """
-        if not retrieved_chunks or not all_chunks:
+        if not question or not expected_keywords:
             return None
 
-        # 简单启发式：从问题中提取可能的关键词
-        # 与所有chunk对比，找到语义相近但文字不匹配的词
+        prompt = f"""你是咖啡知识库的查询扩展学习助手。用户在问："{question}"
+我们发现知识库里有这些相关关键词：{expected_keywords}
 
-        # 提取问题中的关键名词（简单实现：2个字以上的词）
-        question_terms = set()
-        for i in range(len(question)):
-            for j in range(i+2, min(i+6, len(question)+1)):
-                term = question[i:j]
-                if term in question:
-                    question_terms.add(term)
+请分析：用户问题中哪些词可以扩展为以上相关关键词？例如"产地"可以扩展为"产区"。
 
-        # 查找包含相关内容的chunk的来源文本
-        # 如果问题是"耶加雪菲产地"，而知识库有"耶加雪菲产区"
-        # 可以学到 产地 -> 产区
+只输出 JSON 格式：{{"原词": ["扩展词1", "扩展词2"]}}
+如果分析不出有意义的扩展关系，输出 {{}}"""
 
-        return None  # 简化实现，暂时返回None
+        result = _call_ollama(prompt, timeout=20)
+        if not result:
+            return None
+
+        # 解析 JSON
+        try:
+            # 提取 JSON 块
+            json_match = re.search(r"\{.*\}", result, re.DOTALL)
+            if not json_match:
+                return None
+            data = json.loads(json_match.group(0))
+            added = []
+            for from_term, to_terms in data.items():
+                if from_term and isinstance(to_terms, list) and to_terms:
+                    self.add_expansion(from_term, to_terms)
+                    added.append(f"{from_term}→{to_terms}")
+            return "; ".join(added) if added else None
+        except Exception as e:
+            return None
 
     def get_applied_expansions(self, query: str) -> List[Tuple[str, str]]:
         """
-        获取查询中已应用的扩展
+        获取查询中已应用的扩展（仅词典级）
 
         Args:
             query: 用户查询

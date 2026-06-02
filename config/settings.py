@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     log_dir: Path = Path("/app/logs")
     log_retention_days: int = 7
 
+    # 反馈与扩展词库
+    feedback_dir: Path = Path("/app/feedbacks")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
