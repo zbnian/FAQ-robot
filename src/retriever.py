@@ -18,7 +18,7 @@ class RetrievedChunk:
 class Retriever:
     """向量检索器"""
 
-    def __init__(self, enable_expansion: bool = True, enable_llm_expansion: bool = True,
+    def __init__(self, enable_expansion: bool = True, enable_llm_expansion: bool = False,
                  variant_score_decay: float = 0.85):
         self.indexer = FAISSIndexer()
         self._index_loaded = False
