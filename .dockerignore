@@ -1,0 +1,8 @@
+coffee_test/
+.git/
+.gitignore
+debug.log
+feedbacks/
+memory/
+*.md
+!README.md

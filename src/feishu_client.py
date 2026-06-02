@@ -3,6 +3,7 @@
 """
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import *
+from lark_oapi.api.im.v1.model.reply_message_request_body import ReplyMessageRequestBody
 from config.settings import settings
 
 
@@ -15,23 +16,10 @@ class FeishuClient:
         self.client = None
 
         if self.app_id and self.app_secret:
-            self.client = lark.Client.builder() \
-                .app_id(self.app_id) \
-                .app_secret(self.app_secret) \
-                .build()
+            self.client = lark.Client.builder()                 .app_id(self.app_id)                 .app_secret(self.app_secret)                 .build()
 
     def send_message(self, receive_id: str, msg_type: str, content: dict) -> bool:
-        """
-        发送消息
-
-        Args:
-            receive_id: 接收者ID（open_id/user_id/chat_id）
-            msg_type: 消息类型（text/post/image）
-            content: 消息内容
-
-        Returns:
-            是否发送成功
-        """
+        """发送消息"""
         if not self.client:
             print("WARN: 飞书客户端未初始化，跳过发送")
             return False
@@ -69,12 +57,11 @@ class FeishuClient:
             return False
 
         try:
-            request = ReplyMessageRequest.builder()
-            request.message_id(message_id)
-            request.msg_type("text")
-            request.content({"text": text})
+            body = ReplyMessageRequestBody.builder()                 .msg_type("text")                 .content('{"text": "' + text + '"}')                 .build()
 
-            response = self.client.im.v1.message.reply(request.build())
+            request = ReplyMessageRequest.builder()                 .message_id(message_id)                 .request_body(body)                 .build()
+
+            response = self.client.im.v1.message.reply(request)
 
             if response.code == 0:
                 return True

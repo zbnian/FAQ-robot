@@ -1,23 +1,21 @@
 version: "3.9"
 
 services:
-  faq-bot:
-    container_name: faq-bot
+  faq-robot:
+    container_name: faq-robot
     build: .
     env_file: .env
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
+      - OLLAMA_MODEL=qwen2.5:3b-instruct
     ports:
-      - "8080:8080"
+      - "8081:8080"
     volumes:
-      - /mnt/panshi/zbnian个人库/memory/01_Personal/coffee:/app/coffee
+      - /data_s001/data/udata/real/13450391900/output/zbnian个人库/memory/01_Personal/coffee:/app/coffee
       - faq-data:/app/data
       - faq-logs:/app/logs
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
     restart: unless-stopped
+    command: python main.py --ws
 
 volumes:
   faq-data:

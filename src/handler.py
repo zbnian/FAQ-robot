@@ -35,17 +35,12 @@ class MessageHandler:
         if not context:
             answer = "暂无此信息"
             self.feedback.collect(question, answer, "no_context")
-            if message_id and self.feishu.client:
-                self.feishu.reply_text(message_id, answer)
             return answer, False
 
         answer = self.generator.generate(context, question)
 
         if answer == "暂无此信息":
             self.feedback.collect(question, answer, "no_answer")
-
-        if message_id and self.feishu.client:
-            self.feishu.reply_text(message_id, answer)
 
         return answer, True
 

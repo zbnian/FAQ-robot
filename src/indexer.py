@@ -78,6 +78,7 @@ class FAISSIndexer:
         """构建 FAISS 索引"""
         kb_path = kb_path or settings.coffee_path
         index_path = settings.faiss_index_path
+        chunks_path = index_path.parent / "chunks.pkl"
 
         if not force and index_path.exists():
             self.load_index(index_path)
@@ -96,10 +97,22 @@ class FAISSIndexer:
         index_path.parent.mkdir(parents=True, exist_ok=True)
         faiss.write_index(self.index, str(index_path))
 
+        import pickle
+        with open(chunks_path, "wb") as f:
+            pickle.dump(self.chunks, f)
+
     def load_index(self, index_path: Optional[Path] = None):
         """加载 FAISS 索引"""
         index_path = index_path or settings.faiss_index_path
+        chunks_path = index_path.parent / "chunks.pkl"
         self.index = faiss.read_index(str(index_path))
+
+        import pickle
+        if chunks_path.exists():
+            with open(chunks_path, "rb") as f:
+                self.chunks = pickle.load(f)
+        else:
+            self.chunks = []
 
     def search(self, query: str, top_k: int = 3) -> List[Tuple[Chunk, float]]:
         """搜索最相似的 top_k 个 chunk"""

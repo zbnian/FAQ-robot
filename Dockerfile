@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -6,6 +6,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# 设置 HuggingFace 镜像
+ENV HF_ENDPOINT=https://hf-mirror.com
 
 # 复制依赖文件
 COPY requirements.txt .
@@ -17,11 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 创建数据目录
-RUN mkdir -p /app/data /app/logs /app/coffee
-
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+RUN mkdir -p /app/data /app/logs
 
 EXPOSE 8080
 

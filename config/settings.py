@@ -11,12 +11,12 @@ class Settings(BaseSettings):
 
     # Ollama 配置
     ollama_base_url: str = "http://192.168.31.147:56789"
-    ollama_model: str = "qwen2.5:7b-instruct"
+    ollama_model: str = "qwen2.5:3b-instruct"
 
     # RAG 参数
     top_k: int = 3
     similarity_threshold: float = 0.5
-    embedding_model: str = "all-MiniLM-L6-v2"
+    embedding_model: str = "moka-ai/m3e-base"
 
     # 飞书配置
     feishu_app_id: str = ""
