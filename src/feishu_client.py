@@ -5,6 +5,7 @@ import json
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import *
 from lark_oapi.api.im.v1.model.reply_message_request_body import ReplyMessageRequestBody
+from lark_oapi.api.im.v1.model.create_message_request_body import CreateMessageRequestBody
 from config.settings import settings
 
 
@@ -26,12 +27,19 @@ class FeishuClient:
             return False
 
         try:
-            request = CreateMessageRequest.builder()
-            request.receive_id(receive_id)
-            request.msg_type(msg_type)
-            request.content(content)
+            receive_id_type = self._detect_receive_id_type(receive_id)
+            body = CreateMessageRequestBody.builder() \
+                .receive_id(receive_id) \
+                .msg_type(msg_type) \
+                .content(json.dumps(content, ensure_ascii=False)) \
+                .build()
 
-            response = self.client.im.v1.message.create(request.build())
+            request = CreateMessageRequest.builder() \
+                .receive_id_type(receive_id_type) \
+                .request_body(body) \
+                .build()
+
+            response = self.client.im.v1.message.create(request)
 
             if response.code == 0:
                 return True
@@ -42,6 +50,19 @@ class FeishuClient:
         except Exception as e:
             print(f"ERROR: 飞书发送异常 {e}")
             return False
+
+    @staticmethod
+    def _detect_receive_id_type(receive_id: str) -> str:
+        """根据 ID 前缀推断 receive_id_type"""
+        if receive_id.startswith("ou_"):
+            return "open_id"
+        if receive_id.startswith("oc_"):
+            return "chat_id"
+        if receive_id.startswith("u_"):
+            return "user_id"
+        if "@" in receive_id:
+            return "email"
+        return "open_id"  # 默认
 
     def send_text(self, receive_id: str, text: str) -> bool:
         """发送文本消息"""
