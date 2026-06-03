@@ -7,9 +7,14 @@ import time
 import lark_oapi as lark
 from lark_oapi.ws import Client as WsClient
 from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
-from lark_oapi.api.im.v1 import P2ImMessageReceiveV1, P2ImChatAccessEventBotP2pChatEnteredV1
+from lark_oapi.api.im.v1 import (
+    P2ImMessageReceiveV1,
+    P2ImChatAccessEventBotP2pChatEnteredV1,
+)
+from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTrigger
 from config.settings import settings
 from src.handler import MessageHandler
+from src.feedback import FeedbackCollector, STATUS_PENDING, VALID_STATUSES
 
 
 class FeishuWebSocket:
@@ -20,6 +25,8 @@ class FeishuWebSocket:
         self.app_secret = settings.feishu_app_secret
         self.ws_client = None
         self.handler = MessageHandler()
+        self.feedback = self.handler.feedback
+        self.feishu = self.handler.feishu
         self.running = False
         self._processed_messages = {}
         self._dedup_lock = threading.Lock()
@@ -31,14 +38,13 @@ class FeishuWebSocket:
             return
 
         try:
-            # 创建事件处理器
             event_handler = EventDispatcherHandler.builder(
-                "",  # encrypt_key（未加密则留空）
-                ""   # verification_token（留空）
+                "",  # encrypt_key
+                ""   # verification_token
             ).register_p2_im_message_receive_v1(self._on_message_receive) \
-             .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(self._on_chat_entered)
+             .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(self._on_chat_entered) \
+             .register_p2_card_action_trigger(self._on_card_action_trigger)
 
-            # 创建WebSocket客户端
             self.ws_client = WsClient(
                 app_id=self.app_id,
                 app_secret=self.app_secret,
@@ -55,29 +61,19 @@ class FeishuWebSocket:
             print(f"ERROR: 飞书WebSocket连接失败 {e}")
 
     def _on_message_receive(self, data: P2ImMessageReceiveV1) -> None:
-        """
-        处理接收到的消息事件
-
-        Args:
-            data: P2ImMessageReceiveV1 事件对象
-        """
         try:
-            # data.event 是 P2ImMessageReceiveV1Data 对象
             event = data.event
             if event is None:
                 return
 
-            # 获取消息内容
             message = event.message
             if not message:
                 return
 
-            # message 是 Message object, message_type 是属性
             message_type = getattr(message, 'message_type', None)
             if message_type != "text":
                 return
 
-            # content 是字符串，需要解析
             content_str = getattr(message, 'content', '{}')
             if isinstance(content_str, str):
                 content = json.loads(content_str)
@@ -87,6 +83,7 @@ class FeishuWebSocket:
             text = content.get("text", "").strip()
             message_id = getattr(message, 'message_id', None)
             chat_type = getattr(message, 'chat_type', 'p2p')
+            chat_id = getattr(message, 'chat_id', None)
             sender = event.sender if hasattr(event, 'sender') else None
             user_id = None
             if sender:
@@ -94,7 +91,6 @@ class FeishuWebSocket:
                 if sender_id:
                     user_id = getattr(sender_id, 'open_id', None)
 
-            # 检查mentions字段
             mentions = getattr(message, 'mentions', None)
             mention_names = []
             if mentions:
@@ -103,73 +99,193 @@ class FeishuWebSocket:
                     if name:
                         mention_names.append(name)
 
-            print(f"[原始消息] user={user_id}, message_id={message_id}, chat_type={chat_type}, text={text}, mentions={mention_names}")
+            print(f"[原始消息] user={user_id}, chat={chat_id}, message_id={message_id}, chat_type={chat_type}, text={text}, mentions={mention_names}")
 
-            # 私信(p2p)不需要@mention，群聊(group)需要@小光咖啡百科才响应
             if chat_type == 'group':
                 if "小光咖啡百科" not in mention_names:
                     return
-                # 群聊时移除@占位符
                 text = text.replace("@_user_1", "").strip()
 
             if not text:
                 return
 
-            # 消息去重（加锁保证线程安全）
             with self._dedup_lock:
                 if message_id and message_id in self._processed_messages:
                     return
                 self._processed_messages[message_id] = True
 
-                print(f"[收到消息] {user_id}: {text}")
+            print(f"[收到消息] {user_id}: {text}")
 
-                answer, _ = self.handler.process_question(
-                    question=text,
-                    user_id=user_id,
-                    message_id=message_id
-                )
+            # 命令解析（在 RAG 之前）
+            handled, reply = self._try_handle_command(text, user_id, message_id)
+            if handled:
+                if reply and self.feishu.client:
+                    self.feishu.reply_text(message_id, reply)
+                return
 
-                if message_id and self.handler.feishu.client:
-                    self.handler.feishu.reply_text(message_id, answer)
+            # 普通 RAG 问答
+            answer, _ = self.handler.process_question(
+                question=text,
+                user_id=user_id,
+                message_id=message_id
+            )
+
+            if message_id and self.feishu.client:
+                self.feishu.reply_text(message_id, answer)
 
         except Exception as e:
             import traceback
             print(f"ERROR: 处理消息异常 {e}")
             traceback.print_exc()
 
+    def _try_handle_command(self, text: str, user_id: str,
+                            message_id: str) -> tuple:
+        """尝试作为管理命令处理。返回 (handled, reply_text)"""
+        if not text:
+            return False, ""
+
+        stripped = text.strip()
+        cmd = stripped.split()
+        if not cmd:
+            return False, ""
+
+        head = cmd[0]
+
+        # 1. 反馈列表 / 待处理反馈
+        if head in ("反馈列表", "待处理反馈"):
+            items = self.feedback.list_feedback(status=STATUS_PENDING, limit=10)
+            if not items:
+                return True, "✅ 当前没有待处理反馈"
+            lines = [f"📋 待处理反馈（{len(items)} 条）："]
+            for i, r in enumerate(items, 1):
+                q = r.get("用户问题", "")[:40]
+                fb_id = r.get("id", "")
+                ftype = r.get("反馈类型", "")
+                lines.append(f"{i}. `{fb_id}` [{ftype}] {q}...")
+            lines.append("\n标记示例：标记 fb-20260603-001 已处理")
+            return True, "\n".join(lines)
+
+        # 2. 标记 <id> <status> [note]
+        if head == "标记" and len(cmd) >= 3:
+            fb_id = cmd[1]
+            status = cmd[2]
+            note = " ".join(cmd[3:]) if len(cmd) > 3 else None
+            ok, msg = self.feedback.mark(fb_id, status, note=note)
+            if ok:
+                return True, f"✅ {msg}"
+            else:
+                return True, f"❌ {msg}"
+
+        # 3. 绑定管理员（记录当前用户 open_id 到 settings 持久化文件）
+        if head in ("绑定管理员", "我是管理员"):
+            if not user_id:
+                return True, "❌ 无法获取你的 open_id"
+            try:
+                settings_path = settings.__class__.model_config.get("env_file", ".env")
+                if isinstance(settings_path, str):
+                    self._save_admin_open_id(user_id, settings_path)
+                    return True, f"✅ 已绑定管理员 open_id：`{user_id}`\n后续反馈卡片将发到这里"
+            except Exception as e:
+                return True, f"❌ 绑定失败：{e}"
+
+        # 4. 帮助
+        if head in ("帮助", "help", "/help"):
+            return True, (
+                "📖 管理命令：\n"
+                "• 反馈列表 — 查看待处理反馈\n"
+                "• 标记 <id> <待处理/已处理/已忽略> [备注] — 标记反馈\n"
+                "• 绑定管理员 — 把当前账号设为管理员接收方\n"
+                "• 帮助 — 显示本帮助"
+            )
+
+        return False, ""
+
+    def _save_admin_open_id(self, open_id: str, env_path: str):
+        """把 open_id 写回 .env（追加/更新 FEISHU_ADMIN_OPEN_ID）"""
+        from pathlib import Path
+        path = Path(env_path)
+        if not path.exists():
+            return
+        lines = path.read_text(encoding="utf-8").splitlines()
+        new_lines = []
+        found = False
+        for line in lines:
+            if line.strip().startswith("FEISHU_ADMIN_OPEN_ID="):
+                new_lines.append(f"FEISHU_ADMIN_OPEN_ID={open_id}")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"FEISHU_ADMIN_OPEN_ID={open_id}")
+        path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        # 同步更新内存中的 settings（不重启进程）
+        object.__setattr__(settings, "feishu_admin_open_id", open_id)
+
+    def _on_card_action_trigger(self, data: P2CardActionTrigger) -> dict:
+        """处理卡片按钮点击（mark_feedback action）
+
+        返回 dict 给 SDK 渲染 toast/更新卡片
+        """
+        try:
+            event = data.event
+            if event is None:
+                return {}
+            action = getattr(event, "action", None)
+            if not action:
+                return {}
+            value = getattr(action, "value", None) or {}
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except json.JSONDecodeError:
+                    return {}
+            action_name = value.get("action")
+            if action_name != "mark_feedback":
+                return {}
+            fb_id = value.get("feedback_id")
+            status = value.get("status")
+            if not fb_id or not status:
+                return {}
+            ok, msg = self.feedback.mark(fb_id, status)
+            print(f"[卡片回调] {fb_id} → {status}: {msg}")
+            return {
+                "toast": {
+                    "type": "success" if ok else "error",
+                    "content": msg
+                }
+            }
+        except Exception as e:
+            import traceback
+            print(f"ERROR: 卡片回调处理异常 {e}")
+            traceback.print_exc()
+            return {"toast": {"type": "error", "content": f"处理失败：{e}"}}
+
     def _on_chat_entered(self, data: P2ImChatAccessEventBotP2pChatEnteredV1) -> None:
-        """处理用户进入会话事件"""
         try:
             print("[用户进入会话]")
         except Exception as e:
             print(f"ERROR: 处理进入会话事件异常 {e}")
 
     def stop(self):
-        """停止WebSocket连接"""
         self.running = False
         if self.ws_client:
             print("飞书WebSocket已断开")
 
 
 class FeishuWSRunner:
-    """飞书WebSocket运行器"""
-
     def __init__(self):
         self.ws = FeishuWebSocket()
         self.thread = None
 
     def run(self):
-        """在新线程中运行WebSocket"""
         self.ws.start()
         if self.ws.running:
             self.thread = threading.Thread(target=self._wait, daemon=True)
             self.thread.start()
 
     def _wait(self):
-        """等待连接断开"""
         while self.ws.running:
             time.sleep(1)
 
     def stop(self):
-        """停止WebSocket"""
         self.ws.stop()

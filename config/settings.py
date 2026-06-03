@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
     feishu_webhook_url: str = ""
+    # 反馈通知接收方（优先用 open_id，回退到 chat_id，最后 webhook 兜底）
+    feishu_admin_open_id: str = ""
+    feishu_admin_chat_id: str = ""
 
     # 日志配置
     log_dir: Path = Path("/app/logs")
