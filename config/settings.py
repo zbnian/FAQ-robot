@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     # RAG 参数
     top_k: int = 3
-    similarity_threshold: float = 0.5
+    similarity_threshold: float = 0.6
     embedding_model: str = "moka-ai/m3e-base"
 
     # 飞书配置
