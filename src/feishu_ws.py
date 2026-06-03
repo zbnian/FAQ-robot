@@ -176,8 +176,14 @@ class FeishuWebSocket:
             else:
                 return True, f"❌ {msg}"
 
-        # 3. 绑定管理员（记录当前用户 open_id 到 settings 持久化文件）
+        # 3. 绑定管理员（仅当未设置任何管理员时可用，防止劫持）
         if head in ("绑定管理员", "我是管理员"):
+            if settings.feishu_admin_open_id or settings.feishu_admin_chat_id:
+                return True, (
+                    "❌ 管理员已绑定，无法再次绑定。\n"
+                    "如需更换管理员，请编辑 .env 清除 FEISHU_ADMIN_OPEN_ID / "
+                    "FEISHU_ADMIN_CHAT_ID 后重启服务"
+                )
             if not user_id:
                 return True, "❌ 无法获取你的 open_id"
             try:
@@ -194,7 +200,7 @@ class FeishuWebSocket:
                 "📖 管理命令：\n"
                 "• 反馈列表 — 查看待处理反馈\n"
                 "• 标记 <id> <待处理/已处理/已忽略> [备注] — 标记反馈\n"
-                "• 绑定管理员 — 把当前账号设为管理员接收方\n"
+                "• 绑定管理员 — 首次部署时把当前账号设为管理员（已绑定后失效）\n"
                 "• 帮助 — 显示本帮助"
             )
 
