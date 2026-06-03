@@ -1,6 +1,7 @@
 """
 飞书客户端 - lark-oapi SDK
 """
+import json
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import *
 from lark_oapi.api.im.v1.model.reply_message_request_body import ReplyMessageRequestBody
@@ -48,6 +49,15 @@ class FeishuClient:
             receive_id=receive_id,
             msg_type="text",
             content={"text": text}
+        )
+
+    def send_card(self, receive_id: str, card: dict) -> bool:
+        """发送 interactive 卡片（msg_type=interactive）"""
+        # 飞书要求 content 是 JSON 字符串
+        return self.send_message(
+            receive_id=receive_id,
+            msg_type="interactive",
+            content={"card": json.dumps(card, ensure_ascii=False)}
         )
 
     def reply_text(self, message_id: str, text: str) -> bool:
