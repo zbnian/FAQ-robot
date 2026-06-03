@@ -195,54 +195,51 @@ class FeedbackCollector:
         )
 
         return {
-            "msg_type": "interactive",
-            "card": {
-                "config": {"wide_screen_mode": True},
-                "header": {
-                    "title": {"tag": "plain_text", "content": "用户反馈通知"},
-                    "template": tag_color
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "用户反馈通知"},
+                "template": tag_color
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "fields": [
+                        {"is_short": True, "text": {"tag": "lark_md", "content": type_md}},
+                        {"is_short": True, "text": {"tag": "lark_md", "content": f"**时间**\n{timestamp}"}}
+                    ]
                 },
-                "elements": [
-                    {
-                        "tag": "div",
-                        "fields": [
-                            {"is_short": True, "text": {"tag": "lark_md", "content": type_md}},
-                            {"is_short": True, "text": {"tag": "lark_md", "content": f"**时间**\n{timestamp}"}}
-                        ]
-                    },
-                    {"tag": "hr"},
-                    {"tag": "div", "text": {"tag": "lark_md", "content": f"**反馈ID**\n`{feedback_id}`"}},
-                    {"tag": "div", "text": {"tag": "lark_md", "content": f"**用户问题**\n{question}"}},
-                    {"tag": "div", "text": {"tag": "lark_md", "content": f"**机器人回复**\n{answer}"}},
-                    {"tag": "hr"},
-                    {
-                        "tag": "action",
-                        "actions": [
-                            {
-                                "tag": "button",
-                                "text": {"tag": "plain_text", "content": "✓ 已处理"},
-                                "type": "primary",
-                                "value": {
-                                    "action": "mark_feedback",
-                                    "feedback_id": feedback_id,
-                                    "status": STATUS_RESOLVED
-                                }
-                            },
-                            {
-                                "tag": "button",
-                                "text": {"tag": "plain_text", "content": "✗ 已忽略"},
-                                "type": "danger",
-                                "value": {
-                                    "action": "mark_feedback",
-                                    "feedback_id": feedback_id,
-                                    "status": STATUS_IGNORED
-                                }
+                {"tag": "hr"},
+                {"tag": "div", "text": {"tag": "lark_md", "content": f"**反馈ID**\n`{feedback_id}`"}},
+                {"tag": "div", "text": {"tag": "lark_md", "content": f"**用户问题**\n{question}"}},
+                {"tag": "div", "text": {"tag": "lark_md", "content": f"**机器人回复**\n{answer}"}},
+                {"tag": "hr"},
+                {
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "✓ 已处理"},
+                            "type": "primary",
+                            "value": {
+                                "action": "mark_feedback",
+                                "feedback_id": feedback_id,
+                                "status": STATUS_RESOLVED
                             }
-                        ]
-                    },
-                    {"tag": "note", "elements": [{"tag": "plain_text", "content": "FAQ机器人 · 反馈收集"}]}
-                ]
-            }
+                        },
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "✗ 已忽略"},
+                            "type": "danger",
+                            "value": {
+                                "action": "mark_feedback",
+                                "feedback_id": feedback_id,
+                                "status": STATUS_IGNORED
+                            }
+                        }
+                    ]
+                },
+                {"tag": "note", "elements": [{"tag": "plain_text", "content": "FAQ机器人 · 反馈收集"}]}
+            ]
         }
 
     def list_feedback(self, status: Optional[str] = None,

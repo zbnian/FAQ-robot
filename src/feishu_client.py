@@ -74,11 +74,11 @@ class FeishuClient:
 
     def send_card(self, receive_id: str, card: dict) -> bool:
         """发送 interactive 卡片（msg_type=interactive）"""
-        # 飞书要求 content 是 JSON 字符串
+        # 飞书要求 content 是卡片 JSON 字符串（不再嵌套 card 键）
         return self.send_message(
             receive_id=receive_id,
             msg_type="interactive",
-            content={"card": json.dumps(card, ensure_ascii=False)}
+            content=card
         )
 
     def reply_text(self, message_id: str, text: str) -> bool:
