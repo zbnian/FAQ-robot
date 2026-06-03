@@ -246,19 +246,101 @@ class FeishuWebSocket:
             status = value.get("status")
             if not fb_id or not status:
                 return {}
+
             ok, msg = self.feedback.mark(fb_id, status)
             print(f"[卡片回调] {fb_id} → {status}: {msg}")
-            return {
+
+            response: dict = {
                 "toast": {
                     "type": "success" if ok else "error",
                     "content": msg
                 }
             }
+
+            # 标记成功后，返回新卡片覆盖原卡片（去掉按钮、显示新状态）
+            if ok:
+                rec, _ = self.feedback.find_by_id(fb_id)
+                if rec:
+                    new_card = self._build_updated_card(rec, status)
+                    response["card"] = {
+                        "type": "raw",
+                        "data": new_card
+                    }
+
+            return response
         except Exception as e:
             import traceback
             print(f"ERROR: 卡片回调处理异常 {e}")
             traceback.print_exc()
             return {"toast": {"type": "error", "content": f"处理失败：{e}"}}
+
+    def _build_updated_card(self, rec: dict, new_status: str) -> dict:
+        """标记后返回的更新卡片（无按钮，显示新状态）"""
+        # 按新状态上色：已处理=绿，已忽略=灰
+        status_color_map = {
+            "已处理": "green",
+            "已忽略": "grey",
+        }
+        header_color = status_color_map.get(new_status, "blue")
+
+        question = rec.get("用户问题", "")
+        answer = rec.get("机器人回复", "")
+        fb_id = rec.get("id", "")
+        ftype = rec.get("反馈类型", "")
+        handle_time = rec.get("处理时间", "")
+        handle_note = rec.get("处理备注", "")
+
+        max_len = 300
+        if len(question) > max_len:
+            question = question[:max_len] + "..."
+        if len(answer) > max_len:
+            answer = answer[:max_len] + "..."
+
+        elements = [
+            {
+                "tag": "div",
+                "fields": [
+                    {"is_short": True, "text": {
+                        "tag": "lark_md",
+                        "content": f"**反馈状态**\n<text_tag color=\"{header_color}\">{new_status}</text_tag>"
+                    }},
+                    {"is_short": True, "text": {
+                        "tag": "lark_md",
+                        "content": f"**处理时间**\n{handle_time or '-'}"
+                    }}
+                ]
+            },
+            {"tag": "hr"},
+            {"tag": "div", "text": {
+                "tag": "lark_md",
+                "content": f"**反馈ID**\n`{fb_id}`（{ftype}）"
+            }},
+            {"tag": "div", "text": {
+                "tag": "lark_md",
+                "content": f"**用户问题**\n{question}"
+            }},
+            {"tag": "div", "text": {
+                "tag": "lark_md",
+                "content": f"**机器人回复**\n{answer}"
+            }},
+        ]
+        if handle_note:
+            elements.append({"tag": "div", "text": {
+                "tag": "lark_md",
+                "content": f"**处理备注**\n{handle_note}"
+            }})
+        elements.append({"tag": "note", "elements": [
+            {"tag": "plain_text", "content": "FAQ机器人 · 反馈收集"}
+        ]})
+
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "用户反馈通知"},
+                "template": header_color
+            },
+            "elements": elements,
+        }
 
     def _on_chat_entered(self, data: P2ImChatAccessEventBotP2pChatEnteredV1) -> None:
         try:
