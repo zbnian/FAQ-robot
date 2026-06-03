@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     faiss_index_path: Path = Path("/app/data/faiss_index.bin")
 
     # Ollama 配置
-    ollama_base_url: str = "http://192.168.31.147:56789"
+    ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:3b-instruct"
 
     # RAG 参数

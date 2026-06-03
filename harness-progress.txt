@@ -1,5 +1,0 @@
-[2026-05-27T00:00:00Z] [SESSION-1] INIT Harness initialized for project FAQ机器人
-[2026-05-27T00:00:00Z] [SESSION-1] INIT Project path: \\z4pro-48c1\sata11-134XXXX1900\output\FAQ机器人
-[2026-05-27T00:00:00Z] [SESSION-1] INIT Tasks loaded: 14 tasks (task-001 to task-014)
-[2026-05-27T00:00:00Z] [SESSION-1] INIT Ollama: http://192.168.31.147:56789, model=qwen2.5:7b-instruct
-[2026-05-27T00:00:00Z] [SESSION-1] INIT Knowledge base: \\Z4PRO-48C1\sata11-134XXXX1900\output\zbnian个人库\memory\01_Personal\coffee

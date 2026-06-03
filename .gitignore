@@ -1,7 +1,42 @@
+# 环境变量与密钥
 .env
+.env.*
+!.env.example
+*.secret
+*.key
+*.pem
+credentials.json
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+
+# 日志
 *.log
+logs/
+
+# 缓存
+.pytest_cache/
 .feishu_debug/
 .claude/
+.harness-active
+
+# 调试 / 临时脚本（防止误提交本地脚本里的硬编码密钥）
+debug_*.py
+debug_*.log
+scratch_*.py
+
+# 运行时数据
+feedbacks/
+memory/
+data/
+faiss_index*.bin
+
+# 历史进度记录（包含本地路径等环境信息）
+harness-progress.txt
+
+# IDE
+.vscode/
+.idea/

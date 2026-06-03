@@ -11,7 +11,9 @@ services:
     ports:
       - "8081:8080"
     volumes:
-      - /data_s001/data/udata/real/13450391900/output/zbnian个人库/memory/01_Personal/coffee:/app/coffee
+      # 将宿主机咖啡知识库目录挂载到容器内 /app/coffee
+      # 通过 .env 中的 COFFEE_HOST_PATH 注入实际路径（绝对路径）
+      - ${COFFEE_HOST_PATH:-./coffee}:/app/coffee
       - faq-data:/app/data
       - faq-logs:/app/logs
     restart: unless-stopped
