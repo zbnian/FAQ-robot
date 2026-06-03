@@ -67,7 +67,8 @@ class FeishuClient:
             return False
 
         try:
-            body = ReplyMessageRequestBody.builder()                 .msg_type("text")                 .content('{"text": "' + text + '"}')                 .build()
+            content_str = json.dumps({"text": text}, ensure_ascii=False)
+            body = ReplyMessageRequestBody.builder()                 .msg_type("text")                 .content(content_str)                 .build()
 
             request = ReplyMessageRequest.builder()                 .message_id(message_id)                 .request_body(body)                 .build()
 
