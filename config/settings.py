@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     feishu_admin_open_id: str = ""
     feishu_admin_chat_id: str = ""
 
+    # 企业微信智能机器人长连接配置（与回调模式 Token/EncodingAESKey 不同）
+    wecom_bot_id: str = ""
+    wecom_secret: str = ""
+
     # 日志配置
     log_dir: Path = Path("/app/logs")
     log_retention_days: int = 7

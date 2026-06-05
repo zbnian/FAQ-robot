@@ -6,6 +6,10 @@ ollama>=0.1.0
 # 飞书SDK
 lark-oapi>=1.0.0
 
+# 企业微信智能机器人长连接SDK
+wecom-aibot-python-sdk>=1.0.0
+websockets>=12.0
+
 # 调度器
 APScheduler>=3.10.0
 

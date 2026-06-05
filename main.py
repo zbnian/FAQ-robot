@@ -63,19 +63,40 @@ def query(question: str):
 
 
 def start_websocket():
-    """启动飞书WebSocket"""
-    from src.feishu_ws import FeishuWSRunner
-
+    """启动飞书 + 企业微信 WebSocket（按 env 独立开关）"""
     start_health_server()
-    logger.info("启动飞书WebSocket...")
 
     indexer = FAISSIndexer()
     indexer.build_index()
 
-    ws_runner = FeishuWSRunner()
-    ws_runner.run()
+    runners = []
+    channels = []
+    if settings.feishu_app_id and settings.feishu_app_secret:
+        from src.feishu_ws import FeishuWSRunner
+        logger.info("启动飞书WebSocket...")
+        feishu_runner = FeishuWSRunner()
+        # lark-oapi 的 start() 阻塞，必须跑在子线程里
+        threading.Thread(target=feishu_runner.run, daemon=True).start()
+        runners.append(feishu_runner)
+        channels.append("飞书")
+    else:
+        logger.info("飞书凭证未配置，跳过飞书通道")
 
-    logger.info("FAQ 机器人已启动，等待飞书消息...")
+    if settings.wecom_bot_id and settings.wecom_secret:
+        from src.wecom_ws import WeComWSRunner
+        logger.info("启动企业微信WebSocket...")
+        wecom_runner = WeComWSRunner()
+        wecom_runner.run()  # SDK 自带事件循环 + 子线程
+        runners.append(wecom_runner)
+        channels.append("企业微信")
+    else:
+        logger.info("企业微信凭证未配置，跳过企微通道")
+
+    if not runners:
+        logger.error("未配置任何通道凭证，至少需要飞书或企微之一")
+        sys.exit(1)
+
+    logger.info(f"FAQ 机器人已启动，等待消息...（通道：{' + '.join(channels)}）")
 
     try:
         import time
@@ -83,7 +104,8 @@ def start_websocket():
             time.sleep(1)
     except KeyboardInterrupt:
         logger.info("收到退出信号...")
-        ws_runner.stop()
+        for r in runners:
+            r.stop()
         logger.info("已退出")
 
 
