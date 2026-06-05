@@ -1,6 +1,9 @@
 coffee_test/
 .git/
 .gitignore
+.dockerignore
+.env
+.env.*
 debug.log
 feedbacks/
 memory/

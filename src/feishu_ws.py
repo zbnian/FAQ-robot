@@ -176,56 +176,17 @@ class FeishuWebSocket:
             else:
                 return True, f"❌ {msg}"
 
-        # 3. 绑定管理员（仅当未设置任何管理员时可用，防止劫持）
-        if head in ("绑定管理员", "我是管理员"):
-            if settings.feishu_admin_open_id or settings.feishu_admin_chat_id:
-                return True, (
-                    "❌ 管理员已绑定，无法再次绑定。\n"
-                    "如需更换管理员，请编辑 .env 清除 FEISHU_ADMIN_OPEN_ID / "
-                    "FEISHU_ADMIN_CHAT_ID 后重启服务"
-                )
-            if not user_id:
-                return True, "❌ 无法获取你的 open_id"
-            try:
-                settings_path = settings.__class__.model_config.get("env_file", ".env")
-                if isinstance(settings_path, str):
-                    self._save_admin_open_id(user_id, settings_path)
-                    return True, f"✅ 已绑定管理员 open_id：`{user_id}`\n后续反馈卡片将发到这里"
-            except Exception as e:
-                return True, f"❌ 绑定失败：{e}"
-
-        # 4. 帮助
+        # 3. 帮助
         if head in ("帮助", "help", "/help"):
             return True, (
                 "📖 管理命令：\n"
                 "• 反馈列表 — 查看待处理反馈\n"
                 "• 标记 <id> <待处理/已处理/已忽略> [备注] — 标记反馈\n"
-                "• 绑定管理员 — 首次部署时把当前账号设为管理员（已绑定后失效）\n"
-                "• 帮助 — 显示本帮助"
+                "• 帮助 — 显示本帮助\n\n"
+                "管理员 open_id 需在 .env 中配置 FEISHU_ADMIN_OPEN_ID"
             )
 
         return False, ""
-
-    def _save_admin_open_id(self, open_id: str, env_path: str):
-        """把 open_id 写回 .env（追加/更新 FEISHU_ADMIN_OPEN_ID）"""
-        from pathlib import Path
-        path = Path(env_path)
-        if not path.exists():
-            return
-        lines = path.read_text(encoding="utf-8").splitlines()
-        new_lines = []
-        found = False
-        for line in lines:
-            if line.strip().startswith("FEISHU_ADMIN_OPEN_ID="):
-                new_lines.append(f"FEISHU_ADMIN_OPEN_ID={open_id}")
-                found = True
-            else:
-                new_lines.append(line)
-        if not found:
-            new_lines.append(f"FEISHU_ADMIN_OPEN_ID={open_id}")
-        path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-        # 同步更新内存中的 settings（不重启进程）
-        object.__setattr__(settings, "feishu_admin_open_id", open_id)
 
     def _on_card_action_trigger(self, data: P2CardActionTrigger) -> dict:
         """处理卡片按钮点击（mark_feedback action）
