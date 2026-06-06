@@ -185,6 +185,17 @@ WECOM_SECRET=your_bot_secret
 - 30s 心跳，断线 SDK 内置指数退避重连
 - 同一会话 30 条/分钟、1000 条/小时上限
 
+### 运维提示
+
+> ⚠️ **改了 `.env` 后必须 `--force-recreate`**，否则新环境变量不生效。
+
+普通 `docker compose up -d` 不会因为 `env_file` 变化而重建容器 —— 它只检查 `docker-compose.yml` / Dockerfile / 挂载文件变化。`env_file` 是在 `docker compose up` 时由 compose 进程读取并注入到容器的环境变量里，**容器内部看不到 `.env` 文件本身**，所以改 `.env` 后：
+
+- ✅ 正确：`docker compose up -d --force-recreate`（强制重建容器，env 重新注入）
+- ❌ 错误：`docker compose up -d`（容器显示 `Running`，但用的是**旧 env** —— `restart`/`watch` 都救不了，因为环境变量是容器创建时定的）
+
+同理适用于轮换 `FEISHU_APP_SECRET` / `WECOM_SECRET` 等任何 secret：改 `.env` → `--force-recreate` → 看 `Authentication successful` 日志确认。
+
 ---
 
 ## 反幻觉机制

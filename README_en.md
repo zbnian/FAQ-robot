@@ -185,6 +185,17 @@ Where to find them: WeCom admin console → App → AI bot → bot details → c
 - 30s heartbeat; SDK handles exponential backoff reconnect.
 - Rate limit: 30 messages/min and 1000 messages/hour per session.
 
+### Operations gotcha
+
+> ⚠️ **After editing `.env` you MUST `--force-recreate`** — otherwise the new env vars never reach the container.
+
+`docker compose up -d` does **not** detect changes inside `env_file`. It only watches `docker-compose.yml`, the Dockerfile, and bind-mounted file paths. The `env_file` is read by the compose process and the values are injected as environment variables into the container at create time — the container itself never sees the `.env` file. So when you edit `.env`:
+
+- ✅ Correct: `docker compose up -d --force-recreate` (forces a fresh container with the new env)
+- ❌ Wrong: `docker compose up -d` (compose prints `Running`, but the container is still using the **old env** — `restart: always` and `watch` don't help, because env vars are set at container creation)
+
+Same applies to rotating any secret (`FEISHU_APP_SECRET`, `WECOM_SECRET`, etc.): edit `.env` → `--force-recreate` → check `Authentication successful` in the logs to confirm.
+
 ---
 
 ## Anti-Hallucination
