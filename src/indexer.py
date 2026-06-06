@@ -1,7 +1,11 @@
 """
 FAISS Indexer - 按 ## 二级标题分块构建索引
+
+进程内单例：所有 retriever / scheduler / MessageHandler 共享同一份内存索引。
+重建期间通过 RLock 拒绝查询，避免 FAISS Index 对象被并发改写。
 """
 import re
+import threading
 from pathlib import Path
 from typing import List, Tuple, Optional
 import faiss
@@ -28,6 +32,56 @@ class FAISSIndexer:
         self.model = SentenceTransformer(settings.embedding_model)
         self.chunks: List[Chunk] = []
         self.index: Optional[faiss.Index] = None
+        # 读/写锁：scheduler 重建时持写锁（独占），retriever 查询时持读锁（共享）。
+        # 重建期间持写锁，未抢到读锁的查询会直接收到"暂无此信息"，避免 FAISS
+        # 内部状态在 add() 进行中被 search() 读到崩溃。
+        self._rwlock = threading.RLock()
+        self._rebuilding = False
+
+    def is_rebuilding(self) -> bool:
+        """scheduler 重建期间为 True，retriever 可据此快速放行/拒绝"""
+        return self._rebuilding
+
+    def acquire_read(self, timeout: float = 0.0) -> Optional[threading.RLock]:
+        """抢读锁。返回 RLock 表示抢到（用 with 释放），返回 None 表示超时/重建中。
+
+        retriever 调用：timeout=0 即非阻塞；scheduler 重建瞬间持写锁，没抢到就
+        直接返回空上下文，避免卡住飞书/企微消息回复。
+        """
+        if self._rebuilding:
+            return None
+        acquired = self._rwlock.acquire(blocking=False)
+        if not acquired:
+            return None
+        # 抢到锁后再确认一次（防止抢锁过程中 scheduler 进入 rebuilding）
+        if self._rebuilding:
+            self._rwlock.release()
+            return None
+        return self._rwlock
+
+    def acquire_write(self) -> threading.RLock:
+        """抢写锁（阻塞）。scheduler 重建时调用：设置 _rebuilding 并阻塞所有新读锁。"""
+        self._rebuilding = True
+        self._rwlock.acquire()
+        return self._rwlock
+
+    def release_write(self) -> None:
+        """释放写锁并清除重建标记。"""
+        self._rebuilding = False
+        self._rwlock.release()
+
+    def reload_in_memory(self) -> None:
+        """重建完成后，从刚写出的磁盘文件重新 load 到内存。
+
+        scheduler 在 build_index(force=True) 写盘后调用本方法，确保所有持同一
+        引用（单例）的 retriever 看到的是新索引。
+        """
+        with self._rwlock:
+            self._rebuilding = True
+            try:
+                self.load_index()
+            finally:
+                self._rebuilding = False
 
     def load_knowledge_base(self, kb_path: Path) -> List[Chunk]:
         """加载知识库，按 ## 二级标题分块"""
@@ -115,21 +169,47 @@ class FAISSIndexer:
             self.chunks = []
 
     def search(self, query: str, top_k: int = 3) -> List[Tuple[Chunk, float]]:
-        """搜索最相似的 top_k 个 chunk"""
-        if self.index is None:
-            self.load_index()
+        """搜索最相似的 top_k 个 chunk。
 
-        query_vec = self.model.encode([query], normalize_embeddings=True)
-        query_vec = np.array(query_vec).astype("float32")
+        重建期间返回空列表，retriever 据此走"暂无此信息"分支。
+        """
+        lock = self.acquire_read()
+        if lock is None:
+            return []
+        try:
+            if self.index is None:
+                self.load_index()
 
-        scores, indices = self.index.search(query_vec, top_k * 2)
+            query_vec = self.model.encode([query], normalize_embeddings=True)
+            query_vec = np.array(query_vec).astype("float32")
 
-        results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx < len(self.chunks) and score >= settings.similarity_threshold:
-                results.append((self.chunks[idx], float(score)))
+            scores, indices = self.index.search(query_vec, top_k * 2)
 
-        return results[:top_k]
+            results = []
+            for score, idx in zip(scores[0], indices[0]):
+                if idx < len(self.chunks) and score >= settings.similarity_threshold:
+                    results.append((self.chunks[idx], float(score)))
+
+            return results[:top_k]
+        finally:
+            lock.release()
+
+
+_indexer_instance: Optional["FAISSIndexer"] = None
+_indexer_lock = threading.Lock()
+
+
+def get_indexer() -> "FAISSIndexer":
+    """进程内单例。所有 retriever / scheduler / MessageHandler 必须用此函数获取。
+
+    锁外面建实例（SentenceTransformer 加载慢），建好之后单例无锁返回。
+    """
+    global _indexer_instance
+    if _indexer_instance is None:
+        with _indexer_lock:
+            if _indexer_instance is None:
+                _indexer_instance = FAISSIndexer()
+    return _indexer_instance
 
 
 if __name__ == "__main__":
@@ -138,6 +218,6 @@ if __name__ == "__main__":
     parser.add_argument("--rebuild", action="store_true")
     args = parser.parse_args()
 
-    indexer = FAISSIndexer()
+    indexer = get_indexer()
     indexer.build_index(force=args.rebuild)
     print(f"索引构建完成，共 {len(indexer.chunks)} 个chunk")

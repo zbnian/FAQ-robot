@@ -8,7 +8,7 @@ from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from config.settings import settings
-from src.indexer import FAISSIndexer
+from src.indexer import get_indexer
 from src.retriever import Retriever
 from src.generator import Generator
 from src.logger import logger
@@ -36,9 +36,9 @@ def start_health_server():
 
 
 def rebuild_index():
-    """重建索引"""
+    """重建索引（CLI --rebuild 使用，写盘后进程退出）"""
     logger.info("正在重建索引...")
-    indexer = FAISSIndexer()
+    indexer = get_indexer()
     indexer.build_index(force=True)
     logger.info(f"索引构建完成，共 {len(indexer.chunks)} 个 chunk")
 
@@ -66,8 +66,15 @@ def start_websocket():
     """启动飞书 + 企业微信 WebSocket（按 env 独立开关）"""
     start_health_server()
 
-    indexer = FAISSIndexer()
+    # 共享单例 indexer：飞书/企微/scheduler 共用同一份内存索引
+    indexer = get_indexer()
     indexer.build_index()
+
+    # 启动索引重建调度器（每日 03:00）
+    from src.scheduler import IndexScheduler
+    index_scheduler = IndexScheduler(indexer=indexer)
+    index_scheduler.start()
+    logger.info("索引自动重建调度器已启动（每日 03:00）")
 
     runners = []
     channels = []
@@ -104,6 +111,7 @@ def start_websocket():
             time.sleep(1)
     except KeyboardInterrupt:
         logger.info("收到退出信号...")
+        index_scheduler.stop()
         for r in runners:
             r.stop()
         logger.info("已退出")
