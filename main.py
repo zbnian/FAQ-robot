@@ -5,11 +5,11 @@ import argparse
 import sys
 import threading
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from config.settings import settings
 from src.indexer import get_indexer
-from src.retriever import Retriever
+from src.retriever import get_retriever
 from src.generator import Generator
 from src.logger import logger
 
@@ -29,10 +29,11 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def start_health_server():
-    server = HTTPServer(('0.0.0.0', 8080), HealthHandler)
+    # ThreadingHTTPServer：每个请求独立线程，慢请求不阻塞健康检查
+    server = ThreadingHTTPServer(('0.0.0.0', 8080), HealthHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
-    logger.info("健康检查服务已启动: 8080")
+    logger.info("健康检查服务已启动: 8080 (ThreadingHTTPServer)")
 
 
 def rebuild_index():
@@ -45,7 +46,7 @@ def rebuild_index():
 
 def query(question: str):
     """问答"""
-    retriever = Retriever()
+    retriever = get_retriever()
     generator = Generator()
 
     logger.info(f"问题: {question}")
@@ -54,11 +55,11 @@ def query(question: str):
 
     if not context:
         answer = "暂无此信息"
-        print(f"回答: {answer}")
+        logger.info(f"回答: {answer}")
         return answer
 
     answer = generator.generate(context, question)
-    print(f"回答: {answer}")
+    logger.info(f"回答: {answer}")
     return answer
 
 
@@ -75,6 +76,14 @@ def start_websocket():
     index_scheduler = IndexScheduler(indexer=indexer)
     index_scheduler.start()
     logger.info("索引自动重建调度器已启动（每日 03:00）")
+
+    # 提前实例化 IO worker（让 RAG worker 可以拿到同一份 io）
+    from src.feishu_io import get_feishu_io
+    _ = get_feishu_io()
+
+    # 提前实例化 RAG pool（启动日志打出来，便于观察）
+    from src._rag_pool import get_rag_executor
+    _ = get_rag_executor()
 
     runners = []
     channels = []
@@ -114,6 +123,11 @@ def start_websocket():
         index_scheduler.stop()
         for r in runners:
             r.stop()
+        # 关闭各 thread pool
+        from src._rag_pool import shutdown_rag_executor
+        from src.feedback import shutdown_feedback_collector
+        shutdown_rag_executor(wait=False)
+        shutdown_feedback_collector(wait=False)
         logger.info("已退出")
 
 

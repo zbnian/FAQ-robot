@@ -1,5 +1,15 @@
 """
 飞书 WebSocket 客户端 - lark-oapi SDK WebSocket长连接
+
+修后链路：
+  SDK 回调 _on_message_receive（SDK thread-pool 线程）
+    - 解析 + dedup（同步，< 5ms）
+    - 立即 FeishuIOWorker.submit(reply_text, "咖啡知识库为您查找中...") ack
+    - 提交 RAG 到 rag_executor（max_workers=1，限流）
+    - 满载排队时 ack "前面有任务在处理，请稍等"
+
+飞书侧不流式（lark-oapi template_card 增量更新复杂 + ROI 低）：降级为
+"ack + 一次性 reply"。RAG 跑完直接发完整答案。企微侧走真流式 reply_stream。
 """
 import json
 import threading
@@ -15,6 +25,13 @@ from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTr
 from config.settings import settings
 from src.handler import MessageHandler
 from src.feedback import FeedbackCollector, STATUS_PENDING, VALID_STATUSES
+from src.feishu_io import get_feishu_io
+from src._rag_pool import get_rag_executor
+from src._lru_dedup import _LRUDedup
+from src.logger import logger
+
+ACK_BUSY = "已收到，前面有任务在处理，请稍等..."
+ACK_LOOKUP = "咖啡知识库为您查找中，请稍等 1-3 分钟..."
 
 
 class FeishuWebSocket:
@@ -24,17 +41,22 @@ class FeishuWebSocket:
         self.app_id = settings.feishu_app_id
         self.app_secret = settings.feishu_app_secret
         self.ws_client = None
+        # 把 IO worker 注入 handler.feishu：所有 reply_text / send_message
+        # 自动走 FeishuIOWorker 单线程队列
+        from src.feishu_client import FeishuClient as _FeishuClientCls
         self.handler = MessageHandler()
+        self.handler.feishu = _FeishuClientCls(io=get_feishu_io())
         self.feedback = self.handler.feedback
         self.feishu = self.handler.feishu
+        self._rag_executor = get_rag_executor()
         self.running = False
-        self._processed_messages = {}
-        self._dedup_lock = threading.Lock()
+        self._dedup = _LRUDedup(capacity=10000)
+        self._dedup_lock = threading.Lock()  # _LRUDedup 内部已带锁；外锁为兼容旧调用
 
     def start(self):
         """启动WebSocket连接"""
         if not self.app_id or not self.app_secret:
-            print("WARN: 飞书凭证未配置，跳过WebSocket连接")
+            logger.warning("飞书凭证未配置，跳过WebSocket连接")
             return
 
         try:
@@ -55,10 +77,10 @@ class FeishuWebSocket:
             self.ws_client.start()
 
             self.running = True
-            print("飞书WebSocket已连接")
+            logger.info("飞书WebSocket已连接")
 
         except Exception as e:
-            print(f"ERROR: 飞书WebSocket连接失败 {e}")
+            logger.error("飞书WebSocket连接失败: %s", e)
 
     def _on_message_receive(self, data: P2ImMessageReceiveV1) -> None:
         try:
@@ -99,7 +121,7 @@ class FeishuWebSocket:
                     if name:
                         mention_names.append(name)
 
-            print(f"[原始消息] user={user_id}, chat={chat_id}, message_id={message_id}, chat_type={chat_type}, text={text}, mentions={mention_names}")
+            logger.info(f"[原始消息] user={user_id}, chat={chat_id}, message_id={message_id}, chat_type={chat_type}, text={text}, mentions={mention_names}")
 
             if chat_type == 'group':
                 if "小光咖啡百科" not in mention_names:
@@ -110,11 +132,11 @@ class FeishuWebSocket:
                 return
 
             with self._dedup_lock:
-                if message_id and message_id in self._processed_messages:
+                if message_id and self._dedup.seen(message_id):
                     return
-                self._processed_messages[message_id] = True
+                # 第一次见：_LRUDedup.seen 标记过；不需要再写 dict
 
-            print(f"[收到消息] {user_id}: {text}")
+            logger.info(f"[收到消息] {user_id}: {text}")
 
             # 命令解析（在 RAG 之前）
             handled, reply = self._try_handle_command(text, user_id, message_id)
@@ -123,20 +145,30 @@ class FeishuWebSocket:
                     self.feishu.reply_text(message_id, reply)
                 return
 
-            # 普通 RAG 问答
-            answer, _ = self.handler.process_question(
-                question=text,
-                user_id=user_id,
-                message_id=message_id
+            # 普通 RAG 问答：先 ack 立即告知"在查了"，再排队 RAG
+            if message_id and self.feishu.client:
+                self.feishu.reply_text(message_id, ACK_LOOKUP)
+
+            # 提交 RAG 到单 worker 池
+            self._rag_executor.submit(
+                self._run_rag_and_reply, text, user_id, message_id
             )
 
-            if message_id and self.feishu.client:
-                self.feishu.reply_text(message_id, answer)
-
         except Exception as e:
-            import traceback
-            print(f"ERROR: 处理消息异常 {e}")
-            traceback.print_exc()
+            logger.exception("处理消息异常: %s", e)
+
+    def _run_rag_and_reply(self, text: str, user_id, message_id) -> None:
+        """跑在 RAG worker 线程（max_workers=1）。结果通过 FeishuIOWorker 回写。"""
+        try:
+            answer, _ = self.handler.process_question(
+                question=text, user_id=user_id, message_id=message_id
+            )
+        except Exception as e:
+            logger.exception("RAG 失败: %s", e)
+            answer = f"❌ 处理失败：{e}"
+
+        if message_id and self.feishu.client:
+            self.feishu.reply_text(message_id, answer)
 
     def _try_handle_command(self, text: str, user_id: str,
                             message_id: str) -> tuple:
