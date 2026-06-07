@@ -145,7 +145,7 @@ class WeComWebSocket:
             # 跨线程送回 SDK loop：每 N 个 token 推一次
             if len(accumulated) % self.STREAM_PUSH_INTERVAL == 0:
                 self._schedule_reply_stream(
-                    body, msgid or "", "".join(accumulated), finish=False
+                    frame, msgid or "", "".join(accumulated), finish=False
                 )
 
         try:
@@ -155,16 +155,16 @@ class WeComWebSocket:
         finally:
             # 推最后一段（finish=True 收尾）
             self._schedule_reply_stream(
-                body, msgid or "", "".join(accumulated), finish=True, wait=True
+                frame, msgid or "", "".join(accumulated), finish=True, wait=True
             )
 
-    def _schedule_reply_stream(self, body: dict, stream_id: str, content: str,
+    def _schedule_reply_stream(self, frame: dict, stream_id: str, content: str,
                                 finish: bool, wait: bool = False) -> None:
         """跨线程把 reply_stream 送回 SDK loop。wait=True 时等回执（最后一段）。"""
-        if not self._client:
+        if not self._client or frame is None:
             return
         coro = self._client.reply_stream(
-            body, stream_id=stream_id, content=content, finish=finish
+            frame, stream_id=stream_id, content=content, finish=finish
         )
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         if wait:
@@ -184,7 +184,7 @@ class WeComWebSocket:
                 try:
                     loop.run_until_complete(
                         self._client.reply_stream(
-                            body, stream_id=msgid or "", content=answer, finish=True
+                            frame, stream_id=msgid or "", content=answer, finish=True
                         )
                     )
                 finally:
