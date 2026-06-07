@@ -1,9 +1,12 @@
 """
 Retriever - 向量检索模块（支持 query 扩展）
+
+共享单例 indexer：与 scheduler / 飞书 / 企微通道共用同一份内存索引，scheduler
+重建后无需重启进程即生效。
 """
 from typing import List, Tuple, Optional, Set
 from config.settings import settings
-from src.indexer import FAISSIndexer
+from src.indexer import FAISSIndexer, get_indexer
 
 
 class RetrievedChunk:
@@ -19,8 +22,10 @@ class Retriever:
     """向量检索器"""
 
     def __init__(self, enable_expansion: bool = True, enable_llm_expansion: bool = False,
-                 variant_score_decay: float = 0.85):
-        self.indexer = FAISSIndexer()
+                 variant_score_decay: float = 0.85, indexer: Optional[FAISSIndexer] = None):
+        # 共享单例：传 None 时走 get_indexer()，与 scheduler 持同一份内存索引。
+        # 唯一需要新建实例的场景是单测（注入 mock indexer）。
+        self.indexer = indexer if indexer is not None else get_indexer()
         self._index_loaded = False
         self.enable_expansion = enable_expansion
         self.enable_llm_expansion = enable_llm_expansion
@@ -28,8 +33,9 @@ class Retriever:
         self._expander = None
 
     def _ensure_index(self):
-        """确保索引已加载"""
+        """确保索引已加载（首次查询时懒加载）。"""
         if not self._index_loaded:
+            # 走 indexer 自身的 load（会重置 self.index / self.chunks）
             self.indexer.load_index()
             self._index_loaded = True
 
