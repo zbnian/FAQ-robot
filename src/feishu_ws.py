@@ -31,7 +31,7 @@ from src._lru_dedup import _LRUDedup
 from src.logger import logger
 
 ACK_BUSY = "已收到，前面有任务在处理，请稍等..."
-ACK_LOOKUP = "咖啡知识库为您查找中，请稍等 1-3 分钟..."
+ACK_LOOKUP = "查找中，请稍等..."
 
 
 class FeishuWebSocket:

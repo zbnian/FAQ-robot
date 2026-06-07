@@ -94,12 +94,14 @@ class WeComWebSocket:
 
             logger.info(f"[WeCom] {chattype} {user_id}: {text}")
 
-            # 派到 async handler，让 loop 线程回到 SDK 调度
+            # 抓 SDK loop 引用：aibot SDK 不在 client 上挂 _loop 属性，
+            # 但 _on_text 跑在 SDK loop 线程上，get_running_loop() 拿得到。
+            # 存到 self 上，让 default executor 里的 RAG worker 能 run_coroutine_threadsafe
             try:
-                loop = asyncio.get_running_loop()
+                self._loop = asyncio.get_running_loop()
             except RuntimeError:
-                loop = None
-            if loop is None:
+                self._loop = None
+            if self._loop is None:
                 # 不在 asyncio 上下文：兜底同步（不应该走到这里）
                 self._run_rag_sync(frame, body, text, msgid, user_id)
                 return
