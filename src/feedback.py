@@ -1,8 +1,12 @@
 """
 反馈收集模块（带处理状态 + WebSocket 卡片 + webhook 兜底）
+
+进程内单例：所有通道（飞书 / 企微 / 定时任务）共享同一个 FeedbackCollector，
+保证 _seq_lock 唯一。否则两路线程并发 collect 会撞号。
 """
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import requests
 from pathlib import Path
 from datetime import datetime
@@ -15,16 +19,44 @@ STATUS_RESOLVED = "已处理"
 STATUS_IGNORED = "已忽略"
 VALID_STATUSES = {STATUS_PENDING, STATUS_RESOLVED, STATUS_IGNORED}
 
+# 进程内单例：飞书 + 企微 + 定时任务都走同一个 collector，_seq_lock 互通
+_instance: Optional["FeedbackCollector"] = None
+_init_lock = threading.Lock()
+
+# 通知用 TPE：替代每次 collect 启 daemon thread，避免无界增长
+_notify_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="fb-notify")
+_notify_dropped_count = 0
+_notify_dropped_lock = threading.Lock()
+
+
+def get_feedback_collector() -> "FeedbackCollector":
+    """获取 FeedbackCollector 进程内单例（双重检查锁）"""
+    global _instance
+    if _instance is None:
+        with _init_lock:
+            if _instance is None:
+                _instance = FeedbackCollector()
+    return _instance
+
+
+def shutdown_feedback_collector(wait: bool = False) -> None:
+    """进程退出时关闭通知线程池（在 main.py KeyboardInterrupt 路径调用）"""
+    _notify_executor.shutdown(wait=wait, cancel_futures=True)
+
 
 class FeedbackCollector:
     """反馈收集器"""
 
     def __init__(self, feedback_dir: Optional[Path] = None):
+        # 防御手贱 FeedbackCollector() 双 new（单例外的兜底）
+        if hasattr(self, "_initialized"):
+            return
         self.feedback_dir = feedback_dir or Path("./feedbacks")
         self.feedback_dir.mkdir(parents=True, exist_ok=True)
         self._seq_lock = threading.Lock()
         self._feishu = None
         self._feishu_lock = threading.Lock()
+        self._initialized = True
 
     def _get_feishu(self):
         if self._feishu is None:
@@ -82,11 +114,15 @@ class FeedbackCollector:
                 f.write(json.dumps(feedback, ensure_ascii=False) + "\n")
 
         if notify:
-            threading.Thread(
-                target=self._notify,
-                args=(question, answer, feedback_type, timestamp, feedback_id),
-                daemon=True
-            ).start()
+            global _notify_dropped_count
+            try:
+                _notify_executor.submit(
+                    self._notify, question, answer, feedback_type, timestamp, feedback_id
+                )
+            except RuntimeError:
+                # 进程退出阶段 executor 已 shutdown，丢通知但不影响主流程
+                with _notify_dropped_lock:
+                    _notify_dropped_count += 1
 
         return feedback_id
 

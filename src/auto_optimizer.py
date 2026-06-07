@@ -308,7 +308,7 @@ class AutoOptimizer:
         Returns:
             优化结果报告
         """
-        from src.feedback import FeedbackCollector
+        from src.feedback import get_feedback_collector
 
         report = {
             "timestamp": datetime.now().isoformat(),
@@ -318,7 +318,7 @@ class AutoOptimizer:
         }
 
         # 收集昨日反馈
-        collector = FeedbackCollector()
+        collector = get_feedback_collector()
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
         feedback_file = collector.feedback_dir / f"feedback_{yesterday}.jsonl"
 

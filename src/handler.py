@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 from src.retriever import Retriever
 from src.generator import Generator
 from src.feishu_client import FeishuClient
-from src.feedback import FeedbackCollector
+from src.feedback import FeedbackCollector, get_feedback_collector
 
 NO_INFO_MARKER = "暂无此信息"
 
@@ -17,7 +17,7 @@ class MessageHandler:
         self.retriever = Retriever()
         self.generator = Generator()
         self.feishu = FeishuClient()
-        self.feedback = FeedbackCollector()
+        self.feedback = get_feedback_collector()
 
     def process_question(self, question: str, user_id: Optional[str] = None,
                        message_id: Optional[str] = None) -> Tuple[str, bool]:
