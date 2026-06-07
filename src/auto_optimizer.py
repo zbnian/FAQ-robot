@@ -6,7 +6,18 @@ import re
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from config.settings import settings
+
+
+# 模块级 Session：连接池复用，省去每次新建 TCP/TLS
+_ollama_session = requests.Session()
+_ollama_retry = Retry(total=2, backoff_factor=0.3, status_forcelist=[502, 503, 504])
+_ollama_adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=_ollama_retry)
+_ollama_session.mount("http://", _ollama_adapter)
+_ollama_session.mount("https://", _ollama_adapter)
 
 
 # 种子扩展词典（咖啡领域同义词/近义词）
@@ -96,9 +107,8 @@ class ThresholdOptimizer:
 
 def _call_ollama(prompt: str, timeout: int = 30) -> str:
     """调用 Ollama 生成文本（用于 LLM 改写/学习）"""
-    import requests
     try:
-        response = requests.post(
+        response = _ollama_session.post(
             f"{settings.ollama_base_url}/api/generate",
             json={
                 "model": settings.ollama_model,
@@ -308,7 +318,7 @@ class AutoOptimizer:
         Returns:
             优化结果报告
         """
-        from src.feedback import FeedbackCollector
+        from src.feedback import get_feedback_collector
 
         report = {
             "timestamp": datetime.now().isoformat(),
@@ -318,7 +328,7 @@ class AutoOptimizer:
         }
 
         # 收集昨日反馈
-        collector = FeedbackCollector()
+        collector = get_feedback_collector()
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
         feedback_file = collector.feedback_dir / f"feedback_{yesterday}.jsonl"
 

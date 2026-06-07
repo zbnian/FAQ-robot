@@ -1,11 +1,11 @@
 """
 消息处理器
 """
-from typing import Optional, Tuple
-from src.retriever import Retriever
+from typing import Callable, Optional, Tuple
 from src.generator import Generator
 from src.feishu_client import FeishuClient
-from src.feedback import FeedbackCollector
+from src.feedback import FeedbackCollector, get_feedback_collector
+from src.retriever import get_retriever
 
 NO_INFO_MARKER = "暂无此信息"
 
@@ -14,40 +14,58 @@ class MessageHandler:
     """消息处理器"""
 
     def __init__(self):
-        self.retriever = Retriever()
+        self.retriever = get_retriever()
         self.generator = Generator()
         self.feishu = FeishuClient()
-        self.feedback = FeedbackCollector()
+        self.feedback = get_feedback_collector()
 
     def process_question(self, question: str, user_id: Optional[str] = None,
                        message_id: Optional[str] = None) -> Tuple[str, bool]:
-        """
-        处理用户问题
+        """处理用户问题（同步：返回完整答案）"""
+        answer, ok = self._do_process(question)
+        return answer, ok
 
-        Args:
-            question: 用户问题
-            user_id: 用户ID（用于飞书发送）
-            message_id: 消息ID（用于飞书回复）
+    def process_question_streaming(self, question: str, user_id: Optional[str],
+                                    message_id: Optional[str],
+                                    on_token: Callable[[str], None]) -> str:
+        """处理用户问题（流式：每个 token 调一次 on_token）。
+
+        流式场景：调用方通常在 worker 线程跑本方法，on_token 回调内
+        把 token 跨线程送回 SDK 的 event loop（如 asyncio.run_coroutine_threadsafe）。
+        """
+        return self._do_process(question, on_token=on_token)[0]
+
+    def _do_process(self, question: str,
+                    on_token: Optional[Callable[[str], None]] = None) -> Tuple[str, bool]:
+        """实际处理逻辑（同步 / 流式共用）
 
         Returns:
-            (回答内容, 是否成功)
+            (answer, ok)
         """
         context = self.retriever.get_context(question)
 
         if not context:
-            self.feedback.collect(question, NO_INFO_MARKER, "no_context")
+            if not self._is_rebuilding():
+                self.feedback.collect(question, NO_INFO_MARKER, "no_context")
             return NO_INFO_MARKER, False
 
-        answer = self.generator.generate(context, question)
+        if on_token is not None:
+            answer = self.generator.generate_streaming(context, question, on_token)
+        else:
+            answer = self.generator.generate(context, question)
 
-        # 判断是否本质为"暂无此信息"：
-        # - 精确等于
-        # - 答案整体以"暂无此信息"开头/结尾
-        # - 答案较短且包含"暂无此信息"（避免 LLM 在长答案末尾自我否定）
         if self._is_no_info(answer):
-            self.feedback.collect(question, answer, "no_answer")
+            if not self._is_rebuilding():
+                self.feedback.collect(question, answer, "no_answer")
 
         return answer, True
+
+    def _is_rebuilding(self) -> bool:
+        """indexer 是否在重建（重建期间不写 feedback）"""
+        try:
+            return self.retriever.indexer.is_rebuilding()
+        except Exception:
+            return False
 
     def _is_no_info(self, answer: str) -> bool:
         """判断 answer 是否本质为"暂无此信息"

@@ -2,7 +2,18 @@
 通知模块 - 飞书通知发给你
 """
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from config.settings import settings
+
+
+def _build_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(total=2, backoff_factor=0.3, status_forcelist=[502, 503, 504])
+    adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 
 class Notifier:
@@ -10,6 +21,7 @@ class Notifier:
 
     def __init__(self):
         self.webhook_url = settings.feishu_webhook_url
+        self.session = _build_session()
 
     def notify(self, title: str, content: str) -> bool:
         """
@@ -34,7 +46,7 @@ class Notifier:
                 }
             }
 
-            response = requests.post(
+            response = self.session.post(
                 self.webhook_url,
                 json=message,
                 timeout=10
