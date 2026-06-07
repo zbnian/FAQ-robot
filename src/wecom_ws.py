@@ -110,28 +110,26 @@ class WeComWebSocket:
                 self._run_rag_sync(frame, body, text, msgid, user_id)
                 return
 
-            # 限流闸：> MAX_IN_FLIGHT 时直接拒绝（飞书 + 企微共享全局槽位）
-            if not try_acquire_rag_slot():
-                logger.warning(
-                    f"企微 RAG 队列已满（in_flight={get_in_flight_count()}/{MAX_IN_FLIGHT}），"
-                    f"拒绝 msgid={msgid}"
-                )
-                try:
-                    await self._client.reply_text(frame, ACK_OVERLOAD)
-                except Exception as e:
-                    logger.warning("过载 ack 发送失败: %s", e)
-                return
-
+            # 限流闸移到 _handle_async（async），_on_text 是 sync 不能 await
             asyncio.create_task(self._handle_async(frame, body, text, msgid, user_id))
         except Exception as e:
             logger.exception("企业微信 _on_text 异常: %s", e)
 
     async def _handle_async(self, frame: dict, body: dict, text: str,
                              msgid: Optional[str], user_id: str) -> None:
-        """真流式：把 RAG 派到 default executor（max_workers=1），每 N 个 token
-        跨线程送回 SDK loop。槽位已在 _on_text 抢到。"""
+        """限流 + 真流式：抢 RAG 槽位（飞书 + 企微共享），满了先 ack 过载告知。"""
         if not self._client:
-            release_rag_slot()  # 防御：异常路径释放
+            return
+        # 限流闸：> MAX_IN_FLIGHT 时直接拒绝
+        if not try_acquire_rag_slot():
+            logger.warning(
+                f"企微 RAG 队列已满（in_flight={get_in_flight_count()}/{MAX_IN_FLIGHT}），"
+                f"拒绝 msgid={msgid}"
+            )
+            try:
+                await self._client.reply_text(frame, ACK_OVERLOAD)
+            except Exception as e:
+                logger.warning("过载 ack 发送失败: %s", e)
             return
         try:
             await asyncio.wait_for(
