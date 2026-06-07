@@ -107,11 +107,13 @@ class FAISSIndexer:
                     if current_h2 and current_content:
                         text = "\n".join(current_content).strip()
                         if text:
-                            chunks.append(Chunk(
+                            chunk = Chunk(
                                 f"{current_h1} - {current_h2}",
                                 text,
                                 md_file.name
-                            ))
+                            )
+                            chunk._idx = len(chunks)
+                            chunks.append(chunk)
                     current_h2 = h2_match.group(1)
                     current_content = []
                 elif current_h2:
@@ -120,11 +122,13 @@ class FAISSIndexer:
             if current_h2 and current_content:
                 text = "\n".join(current_content).strip()
                 if text:
-                    chunks.append(Chunk(
+                    chunk = Chunk(
                         f"{current_h1} - {current_h2}",
                         text,
                         md_file.name
-                    ))
+                    )
+                    chunk._idx = len(chunks)
+                    chunks.append(chunk)
 
         return chunks
 

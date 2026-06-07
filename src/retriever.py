@@ -4,6 +4,7 @@ Retriever - 向量检索模块（支持 query 扩展）
 共享单例 indexer：与 scheduler / 飞书 / 企微通道共用同一份内存索引，scheduler
 重建后无需重启进程即生效。
 """
+import threading
 from typing import List, Tuple, Optional, Set
 from config.settings import settings
 from src.indexer import FAISSIndexer, get_indexer
@@ -18,6 +19,21 @@ class RetrievedChunk:
         self.query_used = query_used  # 命中此 chunk 的查询（原始或变体）
 
 
+# 进程内单例：飞书 / 企微 runner 走同一份 retriever，expander 也只初始化一次
+_retriever_instance: Optional["Retriever"] = None
+_retriever_lock = threading.Lock()
+
+
+def get_retriever() -> "Retriever":
+    """获取 Retriever 进程内单例（双重检查锁）"""
+    global _retriever_instance
+    if _retriever_instance is None:
+        with _retriever_lock:
+            if _retriever_instance is None:
+                _retriever_instance = Retriever()
+    return _retriever_instance
+
+
 class Retriever:
     """向量检索器"""
 
@@ -27,23 +43,28 @@ class Retriever:
         # 唯一需要新建实例的场景是单测（注入 mock indexer）。
         self.indexer = indexer if indexer is not None else get_indexer()
         self._index_loaded = False
+        self._index_lock = threading.Lock()  # 守护 _ensure_index 的 check-then-act
         self.enable_expansion = enable_expansion
         self.enable_llm_expansion = enable_llm_expansion
         self.variant_score_decay = variant_score_decay  # 变体得分折扣（避免变体抢走Top1）
         self._expander = None
+        self._expander_lock = threading.Lock()  # 守护 _get_expander 的 check-then-act
 
     def _ensure_index(self):
-        """确保索引已加载（首次查询时懒加载）。"""
+        """确保索引已加载（首次查询时懒加载）。并发首次只 load 一次。"""
         if not self._index_loaded:
-            # 走 indexer 自身的 load（会重置 self.index / self.chunks）
-            self.indexer.load_index()
-            self._index_loaded = True
+            with self._index_lock:
+                if not self._index_loaded:
+                    self.indexer.load_index()
+                    self._index_loaded = True
 
     def _get_expander(self):
-        """懒加载 query 扩展器"""
+        """懒加载 query 扩展器。并发首次只 new 一次。"""
         if self._expander is None and self.enable_expansion:
-            from src.auto_optimizer import QueryExpansionLearner
-            self._expander = QueryExpansionLearner()
+            with self._expander_lock:
+                if self._expander is None and self.enable_expansion:
+                    from src.auto_optimizer import QueryExpansionLearner
+                    self._expander = QueryExpansionLearner()
         return self._expander
 
     def retrieve(self, query: str, top_k: Optional[int] = None) -> List[RetrievedChunk]:
@@ -90,14 +111,13 @@ class Retriever:
 
         # 每个 query 检索 top_k，结果合并去重
         # 原始 query 不折扣（decay=1.0），变体 query 乘以 variant_score_decay
-        # 用 chunk 在 self.indexer.chunks 中的索引做唯一 key
+        # 用 chunk._idx（在 indexer.load_knowledge_base 时预分配）做唯一 key，
+        # O(1) 直接用，免去原来的 O(n) self.indexer.chunks.index(chunk)
         best: dict[int, RetrievedChunk] = {}
         for i, q in enumerate(queries):
             decay = 1.0 if i == 0 else self.variant_score_decay
             for chunk, score in self.indexer.search(q, k):
-                if not hasattr(chunk, '_idx'):
-                    chunk._idx = id(chunk)  # 用 id 作 fallback
-                idx = self.indexer.chunks.index(chunk) if chunk in self.indexer.chunks else id(chunk)
+                idx = getattr(chunk, "_idx", id(chunk))  # fallback 应对未走 indexer 的 chunk
                 final_score = float(score) * decay
                 if idx not in best or best[idx].score < final_score:
                     best[idx] = RetrievedChunk(

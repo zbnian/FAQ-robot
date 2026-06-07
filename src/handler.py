@@ -2,10 +2,10 @@
 消息处理器
 """
 from typing import Optional, Tuple
-from src.retriever import Retriever
 from src.generator import Generator
 from src.feishu_client import FeishuClient
 from src.feedback import FeedbackCollector, get_feedback_collector
+from src.retriever import get_retriever
 
 NO_INFO_MARKER = "暂无此信息"
 
@@ -14,7 +14,7 @@ class MessageHandler:
     """消息处理器"""
 
     def __init__(self):
-        self.retriever = Retriever()
+        self.retriever = get_retriever()
         self.generator = Generator()
         self.feishu = FeishuClient()
         self.feedback = get_feedback_collector()
