@@ -27,7 +27,13 @@ from aibot import WSClient, WSClientOptions
 from config.settings import settings
 from src.handler import MessageHandler
 from src._lru_dedup import _LRUDedup
+from src._rag_pool import (
+    try_acquire_rag_slot, release_rag_slot,
+    get_in_flight_count, MAX_IN_FLIGHT,
+)
 from src.logger import logger
+
+ACK_OVERLOAD = "系统繁忙，请稍后再试..."
 
 
 class WeComWebSocket:
@@ -45,8 +51,6 @@ class WeComWebSocket:
         self._client: WSClient | None = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.running = False
-        # 限流：1 worker 串行跑 RAG（设备硬约束：Ollama 单推理 180s）
-        self._rag_sem: Optional[asyncio.Semaphore] = None
 
     def start(self):
         if not self.bot_id or not self.secret:
@@ -106,34 +110,38 @@ class WeComWebSocket:
                 self._run_rag_sync(frame, body, text, msgid, user_id)
                 return
 
-            # 限流 semaphore 懒初始化（必须在 loop 内创建）
-            if self._rag_sem is None:
-                self._rag_sem = asyncio.Semaphore(1)
+            # 限流闸：> MAX_IN_FLIGHT 时直接拒绝（飞书 + 企微共享全局槽位）
+            if not try_acquire_rag_slot():
+                logger.warning(
+                    f"企微 RAG 队列已满（in_flight={get_in_flight_count()}/{MAX_IN_FLIGHT}），"
+                    f"拒绝 msgid={msgid}"
+                )
+                try:
+                    await self._client.reply_text(frame, ACK_OVERLOAD)
+                except Exception as e:
+                    logger.warning("过载 ack 发送失败: %s", e)
+                return
+
             asyncio.create_task(self._handle_async(frame, body, text, msgid, user_id))
         except Exception as e:
             logger.exception("企业微信 _on_text 异常: %s", e)
 
     async def _handle_async(self, frame: dict, body: dict, text: str,
                              msgid: Optional[str], user_id: str) -> None:
-        """限流 + 真流式：限流 1 个 RAG，满了先 ack 排队告知。"""
+        """真流式：把 RAG 派到 default executor（max_workers=1），每 N 个 token
+        跨线程送回 SDK loop。槽位已在 _on_text 抢到。"""
         if not self._client:
+            release_rag_slot()  # 防御：异常路径释放
             return
-        if self._rag_sem.locked():
-            try:
-                await self._client.reply_text(frame, "已收到，前面有任务在处理，请稍等...")
-            except Exception as e:
-                logger.warning("排队 ack 发送失败: %s", e)
-            return
-        async with self._rag_sem:
-            try:
-                await asyncio.wait_for(
-                    asyncio.to_thread(self._run_rag_with_stream, frame, body, text, msgid, user_id),
-                    timeout=600,
-                )
-            except asyncio.TimeoutError:
-                logger.error("RAG 超时 msgid=%s", msgid)
-            except Exception as e:
-                logger.exception("RAG 执行失败: %s", e)
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self._run_rag_with_stream, frame, body, text, msgid, user_id),
+                timeout=600,
+            )
+        except asyncio.TimeoutError:
+            logger.error("RAG 超时 msgid=%s", msgid)
+        except Exception as e:
+            logger.exception("RAG 执行失败: %s", e)
 
     def _run_rag_with_stream(self, frame: dict, body: dict, text: str,
                               msgid: Optional[str], user_id: str) -> None:
@@ -157,6 +165,8 @@ class WeComWebSocket:
             self._schedule_reply_stream(
                 frame, msgid or "", "".join(accumulated), finish=True, wait=True
             )
+            # 流结束（成功/异常）都释放槽位
+            release_rag_slot()
 
     def _schedule_reply_stream(self, frame: dict, stream_id: str, content: str,
                                 finish: bool, wait: bool = False) -> None:

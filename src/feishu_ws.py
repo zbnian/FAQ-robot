@@ -26,12 +26,15 @@ from config.settings import settings
 from src.handler import MessageHandler
 from src.feedback import FeedbackCollector, STATUS_PENDING, VALID_STATUSES
 from src.feishu_io import get_feishu_io
-from src._rag_pool import get_rag_executor
+from src._rag_pool import (
+    get_rag_executor, try_acquire_rag_slot, release_rag_slot,
+    get_in_flight_count, MAX_IN_FLIGHT,
+)
 from src._lru_dedup import _LRUDedup
 from src.logger import logger
 
-ACK_BUSY = "已收到，前面有任务在处理，请稍等..."
 ACK_LOOKUP = "查找中，请稍等..."
+ACK_OVERLOAD = "系统繁忙，请稍后再试..."
 
 
 class FeishuWebSocket:
@@ -145,6 +148,16 @@ class FeishuWebSocket:
                     self.feishu.reply_text(message_id, reply)
                 return
 
+            # 限流闸：> MAX_IN_FLIGHT 时直接拒绝（飞书 + 企微共享全局槽位）
+            if not try_acquire_rag_slot():
+                logger.warning(
+                    f"飞书 RAG 队列已满（in_flight={get_in_flight_count()}/{MAX_IN_FLIGHT}），"
+                    f"拒绝 message_id={message_id}"
+                )
+                if message_id and self.feishu.client:
+                    self.feishu.reply_text(message_id, ACK_OVERLOAD)
+                return
+
             # 普通 RAG 问答：先 ack 立即告知"在查了"，再排队 RAG
             if message_id and self.feishu.client:
                 self.feishu.reply_text(message_id, ACK_LOOKUP)
@@ -160,15 +173,19 @@ class FeishuWebSocket:
     def _run_rag_and_reply(self, text: str, user_id, message_id) -> None:
         """跑在 RAG worker 线程（max_workers=1）。结果通过 FeishuIOWorker 回写。"""
         try:
-            answer, _ = self.handler.process_question(
-                question=text, user_id=user_id, message_id=message_id
-            )
-        except Exception as e:
-            logger.exception("RAG 失败: %s", e)
-            answer = f"❌ 处理失败：{e}"
+            try:
+                answer, _ = self.handler.process_question(
+                    question=text, user_id=user_id, message_id=message_id
+                )
+            except Exception as e:
+                logger.exception("RAG 失败: %s", e)
+                answer = f"❌ 处理失败：{e}"
 
-        if message_id and self.feishu.client:
-            self.feishu.reply_text(message_id, answer)
+            if message_id and self.feishu.client:
+                self.feishu.reply_text(message_id, answer)
+        finally:
+            # 无论成功失败都要释放槽位
+            release_rag_slot()
 
     def _try_handle_command(self, text: str, user_id: str,
                             message_id: str) -> tuple:
