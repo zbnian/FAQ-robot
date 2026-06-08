@@ -198,6 +198,66 @@ WECOM_SECRET=your_bot_secret
 
 ---
 
+## 并发与限流
+
+设备硬约束：当前硬件 Ollama qwen2.5:3b 单推理约 3 分钟/题（用户实测）。Ollama 端单推理串行，并发 N 请求 = N × 3 分钟排队，**代码层无法绕过**。本项目通过以下设计压住 50+ 并发：
+
+### RAG 单 worker 池
+
+- 飞书 + 企微共享一个 `ThreadPoolExecutor(max_workers=1)`
+- 任何时刻只有 1 个 RAG 任务在跑，后续任务在 1 worker 槽位内 FIFO 排队
+- 用户体感差：第 N 个用户要等 (N-1) × 3 分钟，但**不会卡死、不丢消息**
+
+### 飞书降级：ack + 一次性回复
+
+飞书 lark-oapi 完整流式需要 template_card 增量更新（实现复杂），降级为两步：
+
+1. SDK 回调线程收到消息后**立即** ack 卡片：「查找中，请稍等...」
+2. RAG worker 跑完一次性发完整答案
+
+### 企微真流式
+
+企微 aibot SDK 支持 `stream.id` 多轮刷新，做真流式回复：
+
+- 每收到 5 个 token 调 `reply_stream(stream_id, content, finish=False)`
+- 流结束调 `finish=True` 收最后一段
+- 用户在企微端看到消息**逐字打出**
+
+### 全局 RAG 槽位上限（防过载）
+
+进程内 RAG in-flight 数（含正在跑 + 排队）硬上限 **11**（1 跑 + 10 排），定义在 [src/_rag_pool.py](src/_rag_pool.py)：
+
+- ≤ 11：前 11 个用户进 RAG 池，排队等待
+- > 11：第 12+ 用户**直接拒**，立即回「系统繁忙，请稍后再试...」
+
+| 用户 | 收到 | 行为 |
+|---|---|---|
+| 1-11 | 查找中，请稍等... | 进 RAG 池排队 |
+| 12-50 | 系统繁忙，请稍后再试... | 立即拒，不排队 |
+
+注意：1 worker 是物理上限，加更多 worker 无效（Ollama 端排队）。若需要"必回"，应升级硬件（GPU + 大模型），或换更小的 embedding 模型。
+
+### 验证
+
+50 并发压测脚本（[tests/load_test_feishu_50.py](tests/load_test_feishu_50.py)）：
+
+```bash
+py tests/load_test_feishu_50.py
+```
+
+不连真飞书，纯 in-process 测。预期输出：
+
+```
+=== 结果 ===
+IO worker submit 总数: 50
+  reply_text 调用:    50
+  ACK '查找中，请稍等...' (ACK_LOOKUP):    11 (期望 11)
+  ACK '系统繁忙，请稍后再试...' (ACK_OVERLOAD): 39 (期望 39)
+✅ PASS：11 + 39 = 50，拒绝路径生效
+```
+
+---
+
 ## 反幻觉机制
 
 LLM 默认会按训练知识"自信编造"。本项目通过三层防御：
